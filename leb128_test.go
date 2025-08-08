@@ -62,13 +62,6 @@ func TestUnsigned(t *testing.T) {
 	}
 
 	{
-		// empty buffer
-		res, err := leb128.DecodeU64(bytes.NewBuffer([]byte{}))
-		require.NoError(t, err)
-		require.Zero(t, res)
-	}
-
-	{
 		// read error
 		res, err := leb128.DecodeU64(&errorReader{})
 		require.Error(t, err)
@@ -89,6 +82,15 @@ func TestUnsigned(t *testing.T) {
 
 		res, err := leb128.DecodeU64(bytes.NewBuffer(input))
 		require.ErrorIs(t, err, leb128.ErrOverflow)
+		require.Equal(t, uint64(0), res)
+	}
+
+	{
+		// reject non-minimal encoding
+		input := []byte{0x80, 0x0}
+
+		res, err := leb128.DecodeU64(bytes.NewBuffer(input))
+		require.ErrorIs(t, err, leb128.ErrNonMinimal)
 		require.Equal(t, uint64(0), res)
 	}
 }
@@ -191,13 +193,6 @@ func TestSigned(t *testing.T) {
 	}
 
 	{
-		// empty buffer
-		res, err := leb128.DecodeS64(bytes.NewBuffer([]byte{}))
-		require.NoError(t, err)
-		require.Zero(t, res)
-	}
-
-	{
 		// read error
 		res, err := leb128.DecodeS64(&errorReader{})
 		require.Error(t, err)
@@ -212,4 +207,47 @@ func TestSigned(t *testing.T) {
 		require.ErrorIs(t, err, leb128.ErrOverflow)
 		require.Equal(t, int64(0), res)
 	}
+
+	{
+		// reject non-minimal encoding
+		input := []byte{0xff, 0x7f}
+
+		res, err := leb128.DecodeS64(bytes.NewBuffer(input))
+		require.ErrorIs(t, err, leb128.ErrNonMinimal)
+		require.Equal(t, int64(0), res)
+	}
+}
+
+func FuzzUnsignedNonMinimal(f *testing.F) {
+	f.Fuzz(func(t *testing.T, input []byte) {
+		inBuf := bytes.NewBuffer(input)
+		v, err := leb128.DecodeU64(inBuf)
+		if err != nil {
+			return
+		}
+		if inBuf.Len() > 0 {
+			return // have to read the whole input
+		}
+		buf := leb128.EncodeU64(v)
+		if !bytes.Equal(buf, input) {
+			t.Errorf("expected %v, got %v", input, buf)
+		}
+	})
+}
+
+func FuzzSignedNonMinimal(f *testing.F) {
+	f.Fuzz(func(t *testing.T, input []byte) {
+		inBuf := bytes.NewBuffer(input)
+		v, err := leb128.DecodeS64(inBuf)
+		if err != nil {
+			return
+		}
+		if inBuf.Len() > 0 {
+			return // have to read the whole input
+		}
+		buf := leb128.EncodeS64(v)
+		if !bytes.Equal(buf, input) {
+			t.Errorf("expected %v, got %v", input, buf)
+		}
+	})
 }

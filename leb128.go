@@ -12,84 +12,85 @@ import (
 	"io"
 )
 
-const (
-	// maxWidth indicates the maximum number of bytes that can be used
-	// to encode an 8 byte integer in LEB128
-	maxWidth = 10
-)
-
 var (
-	ErrOverflow = errors.New("LEB128 integer overflow (was more than 8 bytes)")
+	ErrOverflow   = errors.New("LEB128 integer overflow (was more than 8 bytes)")
+	ErrNonMinimal = errors.New("LEB128 integer encoding was not minimal")
 )
 
 // DecodeU64 converts a uleb128 byte stream to a uint64. Be careful
 // to ensure that your data can fit in 8 bytes.
 func DecodeU64(r io.Reader) (uint64, error) {
-	var res uint64
+	var res uint64 = 0
+	var shift uint = 0
 
-	bit := int8(0)
 	buf := make([]byte, 1)
-	for i := 0; ; i++ {
-		if i > maxWidth {
-			return 0, ErrOverflow
-		}
 
+	for {
 		_, err := r.Read(buf)
 		if err == io.EOF {
-			break
+			return 0, ErrNonMinimal
 		}
 		if err != nil {
 			return 0, err
 		}
+
 		b := buf[0]
+		res |= uint64(b&0x7F) << shift
+		shift += 7
 
-		res |= uint64(b&0x7f) << (7 * bit)
-
-		signBit := b & 0x80
-		if signBit == 0 {
-			break
+		if (b & 0x80) == 0 {
+			if shift > 64 && b > 1 {
+				return 0, ErrOverflow
+			} else if shift > 7 && b == 0 {
+				return 0, ErrNonMinimal
+			}
+			return res, nil
+		} else if shift > 64 {
+			return 0, ErrOverflow
 		}
-
-		bit++
 	}
-
-	return res, nil
 }
 
 // DecodeS64 converts a sleb128 byte stream to a int64. Be careful
 // to ensure that your data can fit in 8 bytes.
 func DecodeS64(r io.Reader) (int64, error) {
-	var res int64
+	var res int64 = 0
+	var shift uint = 0
+	var prev byte = 0
 
-	shift := 0
 	buf := make([]byte, 1)
-	for i := 0; ; i++ {
-		if i > maxWidth {
-			return 0, ErrOverflow
-		}
 
+	for {
 		_, err := r.Read(buf)
 		if err == io.EOF {
-			break
+			return 0, ErrNonMinimal
 		}
 		if err != nil {
 			return 0, err
 		}
-		b := buf[0]
 
-		res |= int64(b&0x7f) << shift
+		b := buf[0]
+		res |= int64(b&0x7F) << shift
 		shift += 7
 
-		if b&0x80 == 0 {
-			if b&0x40 != 0 {
-				// signed
-				res |= ^0 << shift
+		if (b & 0x80) == 0 {
+			if shift > 64 && b != 0 && b != 0x7f {
+				// the 10th byte (if present) must contain only the sign-extended sign bit
+				return 0, ErrOverflow
+			} else if shift > 7 &&
+				((b == 0 && prev&0x40 == 0) || (b == 0x7f && prev&0x40 > 0)) {
+				// overlong if the sign bit of penultimate byte has been extended
+				return 0, ErrNonMinimal
+			} else if shift < 64 && b&0x40 > 0 {
+				// sign extend negative numbers
+				res |= -1 << shift
 			}
-			break
+			return res, nil
+		} else if shift > 64 {
+			return 0, ErrOverflow
 		}
+		prev = b
 	}
-
-	return res, nil
 }
 
 // EncodeU64 converts num to a uleb128 encoded array of bytes

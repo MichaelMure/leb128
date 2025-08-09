@@ -17,7 +17,85 @@ func (er *errorReader) Read(_ []byte) (int, error) {
 	return 0, fmt.Errorf("test error")
 }
 
-func TestUnsigned(t *testing.T) {
+func TestUnsigned32(t *testing.T) {
+	// simple low-range cases
+	for ndx := uint32(0); ndx < 512; ndx++ {
+		buf := leb128.EncodeU32(ndx)
+		require.NotEmpty(t, buf)
+		if ndx >= 384 { // [384,512)
+			// i.e. 384 => [128,3]
+			require.Len(t, buf, 2)
+			require.Equal(t, byte(ndx), buf[0])
+			require.Equal(t, byte(3), buf[1])
+		} else if ndx >= 256 { // [256,384)
+			// i.e. 256 => [128,2]
+			require.Len(t, buf, 2)
+			require.Equal(t, byte(ndx-128), buf[0])
+			require.Equal(t, byte(2), buf[1])
+		} else if ndx >= 128 { // [128,256)
+			// i.e. 256 => [128,1]
+			require.Len(t, buf, 2)
+			require.Equal(t, byte(ndx), buf[0])
+			require.Equal(t, byte(1), buf[1])
+		} else { // [0,128)
+			require.Len(t, buf, 1)
+			require.Equal(t, byte(ndx), buf[0])
+		}
+
+		// translate back
+		res, err := leb128.DecodeU32(bytes.NewBuffer(buf))
+		require.NoError(t, err)
+		require.Equal(t, ndx, res)
+	}
+
+	{
+		// max uint32
+		expected := []byte{0xff, 0xff, 0xff, 0xff, 0x0f}
+
+		buf := leb128.EncodeU32(math.MaxUint32)
+		require.Equal(t, expected, buf)
+
+		// translate back
+		res, err := leb128.DecodeU32(bytes.NewBuffer(buf))
+		require.NoError(t, err)
+		require.Equal(t, uint32(math.MaxUint32), res)
+	}
+
+	{
+		// read error
+		res, err := leb128.DecodeU32(&errorReader{})
+		require.Error(t, err)
+		require.Zero(t, res)
+	}
+
+	{
+		// ensure that we stop at the correct time
+		input := []byte{0x78, 0x10, 0xf, 0xa, 0xb, 0x90, 0x01, 0, 0xff, 0xff, 0xff}
+		res, err := leb128.DecodeU32(bytes.NewBuffer(input))
+		require.NoError(t, err)
+		require.Equal(t, uint32(120), res)
+	}
+
+	{
+		// handle overflow (final bytes would overflow an 4 byte integer)
+		input := []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0}
+
+		res, err := leb128.DecodeU32(bytes.NewBuffer(input))
+		require.ErrorIs(t, err, leb128.ErrOverflow)
+		require.Equal(t, uint32(0), res)
+	}
+
+	{
+		// reject non-minimal encoding
+		input := []byte{0x80, 0x0}
+
+		res, err := leb128.DecodeU32(bytes.NewBuffer(input))
+		require.ErrorIs(t, err, leb128.ErrNonMinimal)
+		require.Equal(t, uint32(0), res)
+	}
+}
+
+func TestUnsigned64(t *testing.T) {
 	// simple low-range cases
 	for ndx := uint64(0); ndx < 512; ndx++ {
 		buf := leb128.EncodeU64(ndx)
@@ -77,7 +155,7 @@ func TestUnsigned(t *testing.T) {
 	}
 
 	{
-		// restrict to 10 bytes (final bytes would overflow an 8 byte integer)
+		// handle overflow (final bytes would overflow an 8 byte integer)
 		input := []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0}
 
 		res, err := leb128.DecodeU64(bytes.NewBuffer(input))
@@ -95,7 +173,7 @@ func TestUnsigned(t *testing.T) {
 	}
 }
 
-func TestSigned(t *testing.T) {
+func TestSigned64(t *testing.T) {
 	// simple low-range positive cases
 	for ndx := int64(0); ndx < 512; ndx++ {
 		buf := leb128.EncodeS64(ndx)
@@ -218,7 +296,7 @@ func TestSigned(t *testing.T) {
 	}
 }
 
-func FuzzUnsignedNonMinimal(f *testing.F) {
+func FuzzUnsigned64NonMinimal(f *testing.F) {
 	f.Fuzz(func(t *testing.T, input []byte) {
 		inBuf := bytes.NewBuffer(input)
 		v, err := leb128.DecodeU64(inBuf)
@@ -235,7 +313,7 @@ func FuzzUnsignedNonMinimal(f *testing.F) {
 	})
 }
 
-func FuzzSignedNonMinimal(f *testing.F) {
+func FuzzSigned64NonMinimal(f *testing.F) {
 	f.Fuzz(func(t *testing.T, input []byte) {
 		inBuf := bytes.NewBuffer(input)
 		v, err := leb128.DecodeS64(inBuf)

@@ -13,9 +13,43 @@ import (
 )
 
 var (
-	ErrOverflow   = errors.New("LEB128 integer overflow (was more than 8 bytes)")
+	ErrOverflow   = errors.New("LEB128 integer overflow")
 	ErrNonMinimal = errors.New("LEB128 integer encoding was not minimal")
 )
+
+// DecodeU32 converts a uleb128 byte stream to a uint32. Be careful
+// to ensure that your data can fit in 4 bytes.
+func DecodeU32(r io.Reader) (uint32, error) {
+	var res uint32 = 0
+	var shift uint = 0
+
+	buf := make([]byte, 1)
+
+	for {
+		_, err := r.Read(buf)
+		if err == io.EOF {
+			return 0, ErrNonMinimal
+		}
+		if err != nil {
+			return 0, err
+		}
+
+		b := buf[0]
+		res |= uint32(b&0x7F) << shift
+		shift += 7
+
+		if (b & 0x80) == 0 {
+			if shift > 32 && b > 0b1111 {
+				return 0, ErrOverflow
+			} else if shift > 7 && b == 0 {
+				return 0, ErrNonMinimal
+			}
+			return res, nil
+		} else if shift > 32 {
+			return 0, ErrOverflow
+		}
+	}
+}
 
 // DecodeU64 converts a uleb128 byte stream to a uint64. Be careful
 // to ensure that your data can fit in 8 bytes.
@@ -93,9 +127,30 @@ func DecodeS64(r io.Reader) (int64, error) {
 	}
 }
 
+// EncodeU32 converts num to a uleb128 encoded array of bytes
+func EncodeU32(num uint32) []byte {
+	buf := make([]byte, 0, 4)
+
+	done := false
+	for !done {
+		b := byte(num & 0x7F)
+
+		num = num >> 7
+		if num == 0 {
+			done = true
+		} else {
+			b |= 0x80
+		}
+
+		buf = append(buf, b)
+	}
+
+	return buf
+}
+
 // EncodeU64 converts num to a uleb128 encoded array of bytes
 func EncodeU64(num uint64) []byte {
-	buf := make([]byte, 0)
+	buf := make([]byte, 0, 8)
 
 	done := false
 	for !done {
@@ -116,7 +171,7 @@ func EncodeU64(num uint64) []byte {
 
 // EncodeS64 converts num to a sleb128 encoded array of bytes
 func EncodeS64(num int64) []byte {
-	buf := make([]byte, 0)
+	buf := make([]byte, 0, 8)
 
 	done := false
 	for !done {
